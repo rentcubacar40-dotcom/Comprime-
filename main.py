@@ -148,12 +148,12 @@ async def compress_callback(_, cb):
     "ffmpeg", "-y",
     "-i", input_path,
 
-    "-vf", f"scale={scale},fps=30",
+    "-vf", f"scale={scale}:flags=lanczos,fps=23",
     "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-crf", "30",
+    "-preset", "veryfast",
+    "-crf", "28",
     "-pix_fmt", "yuv420p",
-    "-profile:v", "baseline",
+    "-profile:v", "main",
     "-movflags", "+faststart",
 
     "-c:a", "aac",

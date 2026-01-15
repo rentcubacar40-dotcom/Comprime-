@@ -145,18 +145,24 @@ async def compress_callback(_, cb):
     )
 
     cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-vf", f"scale={scale}",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "28",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-progress", "pipe:1",
-        "-nostats",
-        output_path
-    ]
+    "ffmpeg", "-y",
+    "-i", input_path,
+
+    "-vf", f"scale={scale},fps=30",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "30",
+    "-pix_fmt", "yuv420p",
+    "-profile:v", "baseline",
+    "-movflags", "+faststart",
+
+    "-c:a", "aac",
+    "-b:a", "96k",
+
+    "-progress", "pipe:1",
+    "-nostats",
+    output_path
+]
 
     process = subprocess.Popen(
         cmd,

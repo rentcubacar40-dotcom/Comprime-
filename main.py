@@ -148,8 +148,8 @@ async def compress_callback(_, cb):
     "ffmpeg", "-y",
     "-i", input_path,
 
-    "-vf", f"scale={scale},fps=30",
-    "-c:v", "libx264",
+    "-vf", f"scale={scale},fps=23",
+    "-c:v", "libx265",
     "-preset", "ultrafast",
     "-crf", "30",
     "-pix_fmt", "yuv420p",
@@ -157,7 +157,7 @@ async def compress_callback(_, cb):
     "-movflags", "+faststart",
 
     "-c:a", "aac",
-    "-b:a", "96k",
+    "-b:a", "60k",
 
     "-progress", "pipe:1",
     "-nostats",

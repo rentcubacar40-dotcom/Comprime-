@@ -6,6 +6,7 @@ import math
 import subprocess
 import json
 import re
+from datetime import timedelta
 
 from flask import Flask
 from pyrogram import Client, filters
@@ -40,7 +41,7 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=4,  # Reducido para Render gratis
+    workers=4,
     in_memory=True
 )
 
@@ -49,16 +50,12 @@ def progress_bar(percent: int, size: int = 20) -> str:
     filled = int(size * percent / 100)
     return "█" * filled + "░" * (size - filled)
 
-def get_video_duration(path: str) -> float:
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=duration",
-        "-of", "json", path
-    ]
-    result = subprocess.check_output(cmd)
-    data = json.loads(result)
-    return float(data["streams"][0]["duration"])
+def format_time(seconds: float) -> str:
+    """Formatea segundos a MM:SS o HH:MM:SS"""
+    if seconds < 3600:
+        return f"{int(seconds // 60):02d}:{int(seconds % 60):02d}"
+    else:
+        return str(timedelta(seconds=int(seconds)))
 
 def get_video_info(path: str) -> dict:
     """Obtiene información del video para optimización"""
@@ -99,7 +96,6 @@ def clean_files(*paths):
 def get_compression_settings(video_info, target_res):
     """Configuración inteligente basada en el video original"""
     original_height = video_info["height"]
-    fps = video_info["fps"]
     
     # Mapeo de resoluciones
     scale_map = {
@@ -110,21 +106,24 @@ def get_compression_settings(video_info, target_res):
     
     # Si el video original es menor a la resolución objetivo, mantener original
     if original_height <= int(target_res):
-        scale = f"-2:{target_res}"  # Mantener proporción, altura objetivo
+        scale = f"-2:{target_res}"
     else:
         scale = scale_map[target_res]
     
-    # Ajustar FPS: mantener original si es 24/25/30, sino limitar
+    # Ajustar FPS: mantener original si es cine, sino limitar
+    fps = video_info["fps"]
     if 23 <= fps <= 30:
         fps_setting = f"fps={fps}"
+    elif fps > 30:
+        fps_setting = "fps=24"
     else:
-        fps_setting = "fps=24"  # Estándar cine
+        fps_setting = "fps=23.976"
     
-    # Configuración por resolución
+    # Configuración por resolución (optimizada para Render gratis)
     settings = {
-        "360": {"crf": 24, "preset": "faster", "audio_bitrate": "64k"},
-        "480": {"crf": 23, "preset": "fast", "audio_bitrate": "80k"},
-        "720": {"crf": 22, "preset": "medium", "audio_bitrate": "96k"}
+        "360": {"crf": 24, "preset": "faster", "audio_bitrate": "64k", "threads": 2},
+        "480": {"crf": 23, "preset": "fast", "audio_bitrate": "80k", "threads": 2},
+        "720": {"crf": 22, "preset": "medium", "audio_bitrate": "96k", "threads": 1}
     }
     
     config = settings[target_res]
@@ -135,18 +134,27 @@ def get_compression_settings(video_info, target_res):
         "crf": config["crf"],
         "preset": config["preset"],
         "audio_bitrate": config["audio_bitrate"],
-        "threads": 2  # Limitado para Render gratis
+        "threads": config["threads"]
     }
+
+def format_file_size(size_bytes):
+    """Formatea bytes a KB, MB, GB"""
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 # ===================== START =====================
 @app.on_message(filters.command("start"))
 async def start(_, msg):
     await msg.reply(
         "🎬 **Video Compressor Bot 2026**\n\n"
-        "✨ **Optimizado para películas**\n"
-        "✔ Preserva calidad cinematográfica\n"
-        "✔ FPS original (24/23.976)\n"  
-        "✔ Audio optimizado\n\n"
+        "✨ **Optimizado para Render Gratis**\n"
+        "✔ Progreso en tiempo real\n"
+        "✔ Tiempo estimado mostrado\n"
+        "✔ Optimizado para películas\n\n"
         "📤 Envíame un video",
         quote=True
     )
@@ -165,23 +173,49 @@ async def receive_video(_, msg):
     status = await msg.reply("⬇️ Descargando...\n\n░░░░░░░░░░░░░░░░░░ 0%")
 
     last_update = time.time()
+    start_time = time.time()
 
     async def download_progress(current, total):
-        nonlocal last_update
+        nonlocal last_update, start_time
         if total == 0:
             return
-        if time.time() - last_update < 1:
+        
+        current_time = time.time()
+        if current_time - last_update < 1:
             return
-        last_update = time.time()
-
+        
+        last_update = current_time
+        elapsed = current_time - start_time
+        
         percent = int(current * 100 / total)
         bar = progress_bar(percent)
-
-        await safe_edit(
-            status,
-            f"⬇️ Descargando...\n\n{bar} {percent}%\n"
-            f"📊 {current // (1024*1024)}MB / {total // (1024*1024)}MB"
-        )
+        
+        # Calcular velocidad y tiempo estimado
+        if percent > 0:
+            speed = current / elapsed  # bytes por segundo
+            if speed > 0:
+                remaining = (total - current) / speed
+                eta = format_time(remaining)
+            else:
+                eta = "--:--"
+            
+            speed_mb = speed / (1024 * 1024)
+            
+            await safe_edit(
+                status,
+                f"⬇️ **Descargando...**\n\n"
+                f"{bar} {percent}%\n"
+                f"📊 {format_file_size(current)} / {format_file_size(total)}\n"
+                f"⚡ {speed_mb:.1f} MB/s\n"
+                f"⏱️ ETA: {eta}"
+            )
+        else:
+            await safe_edit(
+                status,
+                f"⬇️ **Descargando...**\n\n"
+                f"{bar} {percent}%\n"
+                f"📊 {format_file_size(current)} / {format_file_size(total)}"
+            )
 
     await app.download_media(
         media,
@@ -189,13 +223,18 @@ async def receive_video(_, msg):
         progress=download_progress
     )
 
-    await status.edit(
-        "✅ Video recibido\n\n"
-        "🎬 **Resoluciones disponibles:**\n"
-        "• 360p - Compresión rápida\n"
-        "• 480p - Balance calidad/velocidad\n"
-        "• 720p - Máxima calidad\n\n"
-        "📉 Elige resolución:",
+    # Obtener información del video
+    try:
+        video_info = get_video_info(input_path)
+        duration_str = format_time(video_info["duration"])
+        await status.edit(
+        f"✅ **Video recibido**\n\n"
+        f"📊 **Información:**\n"
+        f"• Resolución: {video_info['width']}x{video_info['height']}\n"
+        f"• FPS: {video_info['fps']:.2f}\n"
+        f"• Duración: {duration_str}\n"
+        f"• Tamaño: {format_file_size(media.file_size)}\n\n"
+        f"🎬 **Elige resolución:**",
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🎥 360p", callback_data=f"360|{input_path}"),
@@ -207,6 +246,10 @@ async def receive_video(_, msg):
             ]
         ])
     )
+    except Exception as e:
+        await status.edit(f"❌ Error al analizar video: {str(e)}")
+        clean_files(input_path)
+        return
 
 # ===================== CALLBACK =====================
 @app.on_callback_query()
@@ -220,44 +263,54 @@ async def compress_callback(_, cb):
     # Obtener información del video original
     try:
         video_info = get_video_info(input_path)
-    except:
-        await cb.message.edit_text("❌ Error al analizar el video")
+    except Exception as e:
+        await cb.message.edit_text(f"❌ Error al analizar video: {str(e)}")
+        clean_files(input_path)
         return
     
     # Configuración inteligente
     settings = get_compression_settings(video_info, res)
     
     output_path = f"{OUTPUT_DIR}/{res}_{os.path.basename(input_path)}"
-
+    original_size = os.path.getsize(input_path)
+    
+    # Calcular tiempo estimado (aproximado)
+    duration_minutes = video_info["duration"] / 60
+    est_time_minutes = duration_minutes * 2.5  # Estimación conservadora
+    
     await cb.message.edit_text(
-        f"⚙️ **Comprimiendo a {res}p**\n\n"
-        f"📊 Original: {video_info['width']}x{video_info['height']}@{video_info['fps']:.2f}fps\n"
-        f"⚡ Config: CRF {settings['crf']}, {settings['preset']}\n\n"
-        "░░░░░░░░░░░░░░░░░░ 0%"
+        f"⚙️ **Iniciando compresión a {res}p**\n\n"
+        f"📊 **Configuración:**\n"
+        f"• CRF: {settings['crf']}\n"
+        f"• Preset: {settings['preset']}\n"
+        f"• Threads: {settings['threads']}\n"
+        f"• Audio: {settings['audio_bitrate']}\n\n"
+        f"⏱️ **Tiempo estimado:** ~{int(est_time_minutes)} minutos\n\n"
+        f"░░░░░░░░░░░░░░░░░░ 0%"
     )
 
-    # 🎬 CONFIGURACIÓN OPTIMIZADA PARA PELÍCULAS
+    # 🎬 CONFIGURACIÓN OPTIMIZADA
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
         
-        # ⚡ Limitar recursos (CRÍTICO en Render gratis)
+        # ⚡ Limitar recursos para Render Gratis
         "-threads", str(settings["threads"]),
         
-        # 🎥 Video optimizado para cine
+        # 🎥 Video optimizado
         "-c:v", "libx264",
         "-preset", settings["preset"],
-        "-tune", "film",  # ★★ OPTIMIZADO PARA PELÍCULAS ★★
+        "-tune", "film",
         "-crf", str(settings["crf"]),
         "-profile:v", "high",
         "-level", "4.0",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         
-        # 🔄 Scaling inteligente manteniendo aspecto
+        # 🔄 Scaling y FPS
         "-vf", f"scale={settings['scale']}:flags=spline,{settings['fps_setting']}",
         
-        # 🔊 Audio de calidad para películas
+        # 🔊 Audio
         "-c:a", "aac",
         "-b:a", settings["audio_bitrate"],
         "-ac", "2",
@@ -270,29 +323,10 @@ async def compress_callback(_, cb):
         output_path
     ]
 
-    # Alternativa ULTRA rápida (si se detecta video muy largo > 2 horas)
-    if video_info["duration"] > 7200:  # > 2 horas
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", input_path,
-            "-threads", "2",
-            "-c:v", "libx264",
-            "-preset", "faster",
-            "-tune", "film",
-            "-crf", "24",
-            "-vf", f"scale={settings['scale'].split(':')[0]}:-2:flags=fast_bilinear",
-            "-c:a", "aac",
-            "-b:a", "64k",
-            "-progress", "pipe:1",
-            "-nostats",
-            output_path
-        ]
-        await cb.message.edit_text("⏩ **Video largo detectado**\nUsando modo rápido...")
-
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,  # Cambiado para debug
+        stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
         universal_newlines=True
@@ -300,96 +334,223 @@ async def compress_callback(_, cb):
 
     time_regex = re.compile(r"out_time_ms=(\d+)")
     speed_regex = re.compile(r"speed=([\d.]+)x")
+    bitrate_regex = re.compile(r"bitrate=([\d.]+)kbits/s")
+    
     last_update = time.time()
     last_percent = 0
+    last_speed = "0.00"
+    start_time = time.time()
+    last_bitrate = "0"
+    estimated_total_time = None
 
-    while True:
-        line = process.stdout.readline()
-        if not line and process.poll() is not None:
-            break
+    try:
+        while True:
+            line = process.stdout.readline()
             
-        match = time_regex.search(line)
-        if match:
-            current_time = int(match.group(1)) / 1_000_000
-            percent = min(99, int(current_time * 100 / video_info["duration"]))
-            
-            # Solo actualizar si hay cambio significativo o cada 2 segundos
-            if percent > last_percent or time.time() - last_update >= 2:
-                last_update = time.time()
-                last_percent = percent
-                bar = progress_bar(percent)
+            # Si el proceso terminó
+            if line == '' and process.poll() is not None:
+                process.wait()
                 
-                # Verificar velocidad
-                speed_match = speed_regex.search(line)
-                speed = speed_match.group(1) if speed_match else "?"
+                # Mostrar 100% completado
+                bar = progress_bar(100)
+                total_elapsed = time.time() - start_time
                 
                 await safe_edit(
                     cb.message,
-                    f"⚙️ **Comprimiendo a {res}p**\n\n"
-                    f"{bar} {percent}%\n"
-                    f"⏱️ {int(current_time//60)}:{int(current_time%60):02d} / "
-                    f"{int(video_info['duration']//60)}:{int(video_info['duration']%60):02d}\n"
-                    f"⚡ Velocidad: {speed}x"
+                    f"✅ **Compresión completada!**\n\n"
+                    f"{bar} 100%\n"
+                    f"⏱️ Tiempo total: {format_time(total_elapsed)}\n"
+                    f"⚡ Velocidad promedio: {last_speed}x\n"
+                    f"📊 Procesando archivo final..."
                 )
-
-        await asyncio.sleep(0.1)
-
-    # Verificar éxito
-    if process.returncode != 0:
-        error = process.stderr.read()[-500:] if process.stderr else "Error desconocido"
-        await cb.message.edit_text(f"❌ **Error en compresión:**\n```{error}```")
+                break
+                
+            if not line:
+                await asyncio.sleep(0.05)
+                continue
+            
+            # Extraer información de progreso
+            time_match = time_regex.search(line)
+            speed_match = speed_regex.search(line)
+            bitrate_match = bitrate_regex.search(line)
+            
+            if time_match:
+                current_time = int(time_match.group(1)) / 1_000_000
+                percent = min(99, int(current_time * 100 / video_info["duration"]))
+                
+                if speed_match:
+                    last_speed = speed_match.group(1)
+                
+                if bitrate_match:
+                    last_bitrate = bitrate_match.group(1)
+                
+                # Calcular tiempo transcurrido y estimado
+                elapsed = time.time() - start_time
+                
+                # Calcular ETA solo si tenemos velocidad
+                if percent > 5 and float(last_speed) > 0:
+                    estimated_total = elapsed / (percent / 100)
+                    remaining = estimated_total - elapsed
+                    eta_str = format_time(remaining)
+                    estimated_total_time = estimated_total
+                else:
+                    eta_str = "Calculando..."
+                    remaining = 0
+                
+                # Actualizar cada 1% de progreso o cada 2 segundos
+                if percent > last_percent or time.time() - last_update >= 2:
+                    last_update = time.time()
+                    last_percent = percent
+                    bar = progress_bar(percent)
+                    
+                    # Calcular compresión aproximada
+                    if percent > 10 and estimated_total_time:
+                        compression_ratio = (elapsed / estimated_total_time) * 100
+                        compression_str = f"{compression_ratio:.0f}%"
+                    else:
+                        compression_str = "--%"
+                    
+                    await safe_edit(
+                        cb.message,
+                        f"⚙️ **Comprimiendo a {res}p**\n\n"
+                        f"{bar} {percent}%\n"
+                        f"⏱️ {format_time(current_time)} / {format_time(video_info['duration'])}\n"
+                        f"⚡ Velocidad: {last_speed}x\n"
+                        f"📶 Bitrate: {last_bitrate} kb/s\n"
+                        f"⏳ Tiempo transcurrido: {format_time(elapsed)}\n"
+                        f"🎯 ETA: {eta_str}"
+                    )
+            
+            await asyncio.sleep(0.05)
+            
+    except Exception as e:
+        print(f"Error en compresión: {e}")
+        await cb.message.edit_text(f"❌ Error durante compresión: {str(e)}")
         clean_files(input_path, output_path)
         return
-
-    # ===================== UPLOAD =====================
+    
+    # Verificar que el archivo se creó
     if not os.path.exists(output_path):
-        await cb.message.edit_text("❌ Error: Archivo de salida no generado")
+        await cb.message.edit_text("❌ Error: No se generó el archivo de salida")
         clean_files(input_path)
         return
-
-    output_size = os.path.getsize(output_path) / (1024*1024)
-    compression_ratio = (1 - output_size / (media.file_size/(1024*1024))) * 100
     
+    output_size = os.path.getsize(output_path)
+    total_time = time.time() - start_time
+    compression_ratio = (1 - output_size / original_size) * 100
+    
+    # ===================== UPLOAD =====================
     await cb.message.edit_text(
-        f"✅ **Compresión completada**\n\n"
-        f"📊 Tamaño final: {output_size:.1f}MB\n"
-        f"📉 Reducción: {compression_ratio:.1f}%\n\n"
-        "⬆️ Subiendo video...\n"
-        "░░░░░░░░░░░░░░░░░░ 0%"
+        f"✅ **Compresión exitosa!**\n\n"
+        f"📊 **Resultados:**\n"
+        f"• Tamaño original: {format_file_size(original_size)}\n"
+        f"• Tamaño final: {format_file_size(output_size)}\n"
+        f"• Reducción: {compression_ratio:.1f}%\n"
+        f"• Tiempo total: {format_time(total_time)}\n\n"
+        f"⬆️ **Subiendo video...**\n"
+        f"░░░░░░░░░░░░░░░░░░ 0%"
     )
 
     last_update = time.time()
+    upload_start = time.time()
 
     async def upload_progress(current, total):
-        nonlocal last_update
+        nonlocal last_update, upload_start
         if total == 0:
             return
-        if time.time() - last_update < 1:
+        
+        current_time = time.time()
+        if current_time - last_update < 1:
             return
-        last_update = time.time()
-
+        
+        last_update = current_time
+        elapsed = current_time - upload_start
+        
         percent = int(current * 100 / total)
         bar = progress_bar(percent)
-
-        await safe_edit(
-            cb.message,
-            f"⬆️ Subiendo video...\n\n{bar} {percent}%\n"
-            f"📤 {current // (1024*1024)}MB / {total // (1024*1024)}MB"
-        )
-
+        
+        # Calcular velocidad de subida
+        if percent > 0:
+            speed = current / elapsed
+            speed_mb = speed / (1024 * 1024)
+            
+            if speed > 0:
+                remaining = (total - current) / speed
+                eta = format_time(remaining)
+            else:
+                eta = "--:--"
+            
+            await safe_edit(
+                cb.message,
+                f"⬆️ **Subiendo video...**\n\n"
+                f"{bar} {percent}%\n"
+                f"📊 {format_file_size(current)} / {format_file_size(total)}\n"
+                f"⚡ {speed_mb:.1f} MB/s\n"
+                f"⏱️ ETA: {eta}"
+            )
+    
     try:
         await cb.message.reply_video(
             video=output_path,
             supports_streaming=True,
             progress=upload_progress,
-            caption=f"🎬 Compresión {res}p\n"
-                   f"📊 {output_size:.1f}MB | {int(video_info['duration']//60)}min"
+            caption=f"🎬 **Video comprimido a {res}p**\n"
+                   f"📊 {format_file_size(output_size)} | {format_time(video_info['duration'])}\n"
+                   f"⚡ Compresión: {compression_ratio:.1f}% más pequeño"
         )
     except Exception as e:
         await cb.message.edit_text(f"❌ Error al subir: {str(e)}")
     finally:
         clean_files(input_path, output_path)
         await cb.message.delete()
+
+# ===================== COMMANDS =====================
+@app.on_message(filters.command("info"))
+async def bot_info(_, msg):
+    await msg.reply(
+        "🤖 **Video Compressor Bot**\n\n"
+        "✨ **Características:**\n"
+        "• Progreso en tiempo real\n"
+        "• Tiempo estimado (ETA)\n"
+        "• Optimizado para Render Gratis\n"
+        "• Preserva calidad de películas\n"
+        "• Límite: 4GB por video\n\n"
+        "📞 **Soporte:** @TuUsuario"
+    )
+
+@app.on_message(filters.command("clean"))
+async def clean_cache(_, msg):
+    import shutil
+    try:
+        if os.path.exists(DOWNLOAD_DIR):
+            shutil.rmtree(DOWNLOAD_DIR)
+        if os.path.exists(OUTPUT_DIR):
+            shutil.rmtree(OUTPUT_DIR)
+        
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        await msg.reply("✅ Caché limpiado correctamente")
+    except Exception as e:
+        await msg.reply(f"❌ Error al limpiar: {str(e)}")
+
+# ===================== ERROR HANDLER =====================
+@app.on_message(filters.command("help"))
+async def help_command(_, msg):
+    await msg.reply(
+        "📚 **Ayuda del Bot**\n\n"
+        "**Comandos disponibles:**\n"
+        "• /start - Iniciar bot\n"
+        "• /info - Información del bot\n"
+        "• /clean - Limpiar caché\n"
+        "• /help - Esta ayuda\n\n"
+        "**Cómo usar:**\n"
+        "1. Envía un video (máx. 4GB)\n"
+        "2. Elige resolución (360p, 480p, 720p)\n"
+        "3. Espera la compresión\n"
+        "4. Recibe el video comprimido\n\n"
+        "⚠️ **Nota:** En Render Gratis, videos grandes pueden tardar varias horas."
+    )
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
@@ -399,7 +560,18 @@ if __name__ == "__main__":
     except:
         pass
     
+    print("=" * 50)
+    print("🎬 Video Compressor Bot 2026")
+    print("✨ Optimizado para Render Gratis")
+    print(f"📁 Descargas: {DOWNLOAD_DIR}")
+    print(f"📁 Salida: {OUTPUT_DIR}")
+    print("=" * 50)
+    
     threading.Thread(target=run_web, daemon=True).start()
     
-    print("✅ Bot iniciado en modo optimizado para películas")
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        print("\n👋 Bot detenido por el usuario")
+    except Exception as e:
+        print(f"❌ Error al iniciar bot: {e}")

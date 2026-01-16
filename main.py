@@ -149,7 +149,7 @@ async def compress_callback(_, cb):
     "-i", input_path,
 
     "-vf", f"scale={scale},fps=23",
-    "-c:v", "libx265",
+    "-c:v", "libx264",
     "-preset", "ultrafast",
     "-crf", "30",
     "-pix_fmt", "yuv420p",

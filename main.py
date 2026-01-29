@@ -215,20 +215,30 @@ async def compress_video(msg, status, input_path, res):
     )
     
     cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-vf", f"scale={scale},fps=28",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "30",
-        "-pix_fmt", "yuv420p",
-        "-profile:v", "baseline",
-        "-movflags", "+faststart",
-        "-c:a", "aac",
-        "-b:a", "60k",
-        "-progress", "pipe:1",
-        "-nostats",
-        output_path
+    "ffmpeg", "-y",
+    "-i", input_path,
+    
+    # Video más comprimido
+    "-vf", f"scale={scale},fps=12",  # ↓ 16 a 12 FPS
+    "-c:v", "libx264",
+    "-preset", "slow",  # ↑ ultrafast a slow (más compresión)
+    "-crf", "36",  # ↑ 30 a 36 (más compresión)
+    "-pix_fmt", "yuv420p",
+    "-profile:v", "baseline",
+    "-movflags", "+faststart",
+    
+    # Audio más comprimido
+    "-c:a", "aac",
+    "-b:a", "32k",  # ↓ 60k a 32k
+    "-ac", "1",  # ↓ Estéreo a mono
+    
+    # Optimizaciones adicionales
+    "-threads", "2",  # Menos threads para más compresión
+    "-x264-params", "scenecut=0:open_gop=0",  # Optimización
+    
+    "-progress", "pipe:1",
+    "-nostats",
+    output_path
     ]
     
     process = subprocess.Popen(

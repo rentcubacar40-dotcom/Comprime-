@@ -129,7 +129,7 @@ async def set_compression(_, cb):
     
     scale_map = {
         "360": "640:360",
-        "480": "640:480",
+        "480": "854:480",
         "720": "1280:720"
     }
     
@@ -196,7 +196,7 @@ async def receive_video(_, msg):
 async def compress_video(msg, status, input_path, res):
     scale_map = {
         "360": "640:360",
-        "480": "640:480",
+        "480": "854:480",
         "720": "1280:720"
     }
     
@@ -219,7 +219,7 @@ async def compress_video(msg, status, input_path, res):
     "-i", input_path,
     
     # Video más comprimido
-    "-vf", f"scale={scale},fps=12",  # ↓ 16 a 12 FPS
+    "-vf", f"scale={scale},fps=23",  # ↓ 16 a 12 FPS
     "-c:v", "libx264",
     "-preset", "slow",  # ↑ ultrafast a slow (más compresión)
     "-crf", "36",  # ↑ 30 a 36 (más compresión)

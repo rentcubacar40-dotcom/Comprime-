@@ -1134,7 +1134,7 @@ async def compress_video(task):
         "-c:a", "aac",
         "-b:a", "60k",
         "-ac", "1",
-        "-threads", "0",
+        "-threads", 2",
         "-x264-params", "scenecut=0:open_gop=0",
         "-progress", "pipe:1",
         "-nostats",

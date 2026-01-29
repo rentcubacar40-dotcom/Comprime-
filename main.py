@@ -221,7 +221,7 @@ async def compress_video(msg, status, input_path, res):
     # Video más comprimido
     "-vf", f"scale={scale},fps=23",  # ↓ 16 a 12 FPS
     "-c:v", "libx264",
-    "-preset", "slow",  # ↑ ultrafast a slow (más compresión)
+    "-preset", "ultrafast",  # ↑ ultrafast a slow (más compresión)
     "-crf", "36",  # ↑ 30 a 36 (más compresión)
     "-pix_fmt", "yuv420p",
     "-profile:v", "baseline",
@@ -229,7 +229,7 @@ async def compress_video(msg, status, input_path, res):
     
     # Audio más comprimido
     "-c:a", "aac",
-    "-b:a", "32k",  # ↓ 60k a 32k
+    "-b:a", "60k",  # ↓ 60k a 32k
     "-ac", "1",  # ↓ Estéreo a mono
     
     # Optimizaciones adicionales

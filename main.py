@@ -27,6 +27,28 @@ OUTPUT_DIR = "output"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Configuraciones de compresión optimizadas para velocidad
+COMPRESSION_PROFILES = {
+    "360": {
+        "scale": "640:360",
+        "crf": 28,  # Un poco menos compresión para más velocidad
+        "preset": "veryfast",  # Más rápido que 'ultrafast' pero con mejor compresión
+        "bitrate": "96k"
+    },
+    "480": {
+        "scale": "854:480",
+        "crf": 26,
+        "preset": "veryfast",
+        "bitrate": "128k"
+    },
+    "720": {
+        "scale": "1280:720",
+        "crf": 24,
+        "preset": "fast",  # Balance entre velocidad y calidad
+        "bitrate": "160k"
+    }
+}
+
 # ===================== WEB (Render needs PORT) =====================
 web = Flask(__name__)
 
@@ -72,6 +94,14 @@ def clean_files(*paths):
         if p and os.path.exists(p):
             os.remove(p)
 
+def get_optimal_threads():
+    """Obtiene el número óptimo de threads para FFmpeg"""
+    try:
+        cpu_count = os.cpu_count()
+        return min(cpu_count, 4) if cpu_count else 2  # Limitar a 4 threads máximo
+    except:
+        return 2
+
 # ===================== MIDDLEWARE PARA ADMIN =====================
 def admin_only(func):
     async def wrapper(client, message):
@@ -89,6 +119,7 @@ async def start(_, msg):
         "🎬 **Video Compressor Bot 2026**\n\n"
         "✔ Hasta **4GB reales**\n"
         "✔ Progreso REAL con barra\n"
+        "✔ Compresión RÁPIDA optimizada\n"
         "✔ 360p / 480p / 720p\n\n"
         "📥 **Nuevo flujo:**\n"
         "1. Primero elige compresión\n"
@@ -105,14 +136,18 @@ async def start(_, msg):
 async def choose_compression(_, cb):
     await cb.message.edit_text(
         "🎯 **Elige resolución de compresión**\n\n"
+        "⚡ **Perfiles optimizados para velocidad:**\n"
+        "• 360p: Compresión muy rápida\n"
+        "• 480p: Balance velocidad/calidad\n"
+        "• 720p: Calidad buena y rápida\n\n"
         "Luego de elegir, envía el video directamente.\n"
         "El bot detectará que ya elegiste compresión.\n\n"
         "👇 Selecciona:",
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("360p", callback_data="set_360"),
-                InlineKeyboardButton("480p", callback_data="set_480"),
-                InlineKeyboardButton("720p", callback_data="set_720")
+                InlineKeyboardButton("360p ⚡", callback_data="set_360"),
+                InlineKeyboardButton("480p ⚡", callback_data="set_480"),
+                InlineKeyboardButton("720p ⚡", callback_data="set_720")
             ]
         ])
     )
@@ -127,18 +162,16 @@ async def set_compression(_, cb):
     user_id = cb.from_user.id
     user_compression[user_id] = res
     
-    scale_map = {
-        "360": "640:360",
-        "480": "854:480",
-        "720": "1280:720"
-    }
+    profile = COMPRESSION_PROFILES[res]
     
     await cb.message.edit_text(
         f"✅ **Compresión {res}p configurada**\n\n"
-        f"📐 Resolución: {scale_map[res]}\n"
+        f"📐 Resolución: {profile['scale']}\n"
+        f"⚡ Preset: {profile['preset']}\n"
+        f"🎚️ Calidad: CRF {profile['crf']}\n"
         f"👤 Usuario: {cb.from_user.first_name}\n\n"
         "📤 **Ahora envía el video**\n"
-        "El bot procesará con esta configuración automáticamente."
+        "El bot procesará con esta configuración optimizada."
     )
 
 # ===================== RECEIVE VIDEO (SOLO CON COMPRESIÓN ELEGIDA) =====================
@@ -192,16 +225,13 @@ async def receive_video(_, msg):
     # Ahora procedemos a comprimir directamente
     await compress_video(msg, status, input_path, res)
 
-# ===================== FUNCIÓN DE COMPRESIÓN =====================
+# ===================== FUNCIÓN DE COMPRESIÓN OPTIMIZADA =====================
 async def compress_video(msg, status, input_path, res):
-    scale_map = {
-        "360": "640:360",
-        "480": "854:480",
-        "720": "1280:720"
-    }
+    profile = COMPRESSION_PROFILES[res]
     
-    scale = scale_map[res]
+    scale_filter = f"scale={profile['scale']}:flags=lanczos"
     output_path = f"{OUTPUT_DIR}/{res}_{msg.from_user.id}_{int(time.time())}.mp4"
+    threads = get_optimal_threads()
     
     try:
         duration = get_video_duration(input_path)
@@ -211,57 +241,71 @@ async def compress_video(msg, status, input_path, res):
         return
     
     await status.edit_text(
-        f"⚙️ **Comprimiendo a {res}p...**\n\n░░░░░░░░░░░░░░░░░░ 0%"
+        f"⚙️ **Comprimiendo a {res}p (optimizado)...**\n\n░░░░░░░░░░░░░░░░░░ 0%"
     )
     
+    # Configuración FFmpeg optimizada para velocidad
     cmd = [
-            'ffmpeg',
-            '-i', input_path,
-            '-vf', scale_filter,
-            '-c:v', 'libx265',  # H.265 para mejor compresión (más moderno que H.264)
-            '-crf', str(crf),
-            '-preset', preset,
-            '-tag:v', 'hvc1',  # Mejor compatibilidad H.265
-            '-c:a', 'aac',  # Mantener audio sin procesar mucho
-            '-b:a', '128k',
-            '-movflags', '+faststart',  # Para streaming rápido
-            '-threads', '0',  # Usar todos los núcleos disponibles
-            '-y',  # Sobrescribir automáticamente
-            output_path
-        ]
+        'ffmpeg',
+        '-y',  # Sobrescribir automáticamente
+        '-i', input_path,
+        '-vf', scale_filter,
+        '-c:v', 'libx265',  # H.265 para mejor compresión
+        '-crf', str(profile['crf']),
+        '-preset', profile['preset'],  # Optimizado para velocidad
+        '-tag:v', 'hvc1',  # Mejor compatibilidad H.265
+        '-c:a', 'aac',  # Mantener audio sin procesar mucho
+        '-b:a', profile['bitrate'],
+        '-movflags', '+faststart',  # Para streaming rápido
+        '-threads', str(threads),  # Usar threads optimizados
+        '-x265-params', 'no-sao=1:strong-intra-smoothing=0',  # Optimizaciones H.265
+        '-progress', 'pipe:1',
+        '-nostats',
+        output_path
+    ]
     
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        universal_newlines=True
     )
     
     time_regex = re.compile(r"out_time_ms=(\d+)")
     last_update = time.time()
     
+    # Leer progreso en tiempo real
     while True:
         line = process.stdout.readline()
-        if not line:
+        if not line and process.poll() is not None:
             break
         
         match = time_regex.search(line)
         if match:
             current_time = int(match.group(1)) / 1_000_000
-            percent = min(100, int(current_time * 100 / duration))
-            if time.time() - last_update >= 1:
+            percent = min(99, int(current_time * 100 / duration))
+            if time.time() - last_update >= 0.5:  # Actualizar más frecuente
                 last_update = time.time()
                 bar = progress_bar(percent)
                 await safe_edit(
                     status,
-                    f"⚙️ **Comprimiendo a {res}p...**\n\n{bar} {percent}%"
+                    f"⚙️ **Comprimiendo a {res}p (optimizado)...**\n\n{bar} {percent}%\n"
+                    f"⚡ Usando {threads} threads | Preset: {profile['preset']}"
                 )
         
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)
     
     process.wait()
     
-    # ===================== UPLOAD =====================
+    # Verificar si el archivo fue creado
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        await status.edit_text(f"❌ Error en la compresión\n\nFFmpeg falló al crear el archivo.")
+        clean_files(input_path, output_path)
+        return
+    
+    # ===================== UPLOAD OPTIMIZADO =====================
     await status.edit_text(
         f"📤 **Subiendo video {res}p...**\n\n░░░░░░░░░░░░░░░░░░ 0%"
     )
@@ -281,20 +325,23 @@ async def compress_video(msg, status, input_path, res):
         
         await safe_edit(
             status,
-            f"📤 **Subiendo video {res}p...**\n\n{bar} {percent}%"
+            f"📤 **Subiendo video {res}p...**\n\n{bar} {percent}%\n"
+            f"📊 Tamaño: {os.path.getsize(output_path) // 1024 // 1024}MB"
         )
     
     try:
         await msg.reply_video(
             video=output_path,
-            caption=f"✅ **Video comprimido a {res}p**\n\n👤 Enviado por: {msg.from_user.first_name}",
+            caption=f"✅ **Video comprimido a {res}p**\n\n"
+                   f"👤 Enviado por: {msg.from_user.first_name}\n"
+                   f"⚡ Procesado con H.265 (optimizado)",
             supports_streaming=True,
             progress=upload_progress
         )
     except Exception as e:
         await status.edit_text(f"❌ Error al subir: {str(e)}")
     
-    # Limpiar archivos y opcionalmente resetear compresión
+    # Limpiar archivos
     clean_files(input_path, output_path)
     await status.delete()
     
@@ -306,6 +353,24 @@ async def compress_video(msg, status, input_path, res):
 @admin_only
 async def change_compression(_, msg):
     await choose_compression(_, msg)
+
+# ===================== COMANDO PARA INFO =====================
+@app.on_message(filters.command("info"))
+@admin_only
+async def info_command(_, msg):
+    user_id = msg.from_user.id
+    current_res = user_compression.get(user_id, "No configurada")
+    
+    info_text = f"📊 **Información del Bot**\n\n"
+    info_text += f"👤 Tu compresión actual: **{current_res}p**\n"
+    info_text += f"📂 Descargas activas: {len([f for f in os.listdir(DOWNLOAD_DIR) if f.endswith('.mp4')])}\n"
+    info_text += f"📤 Procesados: {len([f for f in os.listdir(OUTPUT_DIR) if f.endswith('.mp4')])}\n\n"
+    info_text += "⚡ **Configuraciones optimizadas:**\n"
+    
+    for res, profile in COMPRESSION_PROFILES.items():
+        info_text += f"• {res}p: CRF {profile['crf']}, Preset {profile['preset']}\n"
+    
+    await msg.reply(info_text)
 
 # ===================== MAIN =====================
 if __name__ == "__main__":

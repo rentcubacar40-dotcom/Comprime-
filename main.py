@@ -222,7 +222,7 @@ async def compress_video(msg, status, input_path, res):
     "-vf", f"scale={scale},fps=23",  # ↓ 16 a 12 FPS
     "-c:v", "libx264",
     "-preset", "ultrafast",  # ↑ ultrafast a slow (más compresión)
-    "-crf", "30",  # ↑ 30 a 36 (más compresión)
+    "-crf", "35",  # ↑ 30 a 36 (más compresión)
     "-pix_fmt", "yuv420p",
     "-profile:v", "baseline",
     "-movflags", "+faststart",
